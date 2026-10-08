@@ -42,6 +42,9 @@ struct ContentView: View {
         .sheet(item: $model.copyPrompt) { prompt in
             CopyConfirmation(prompt: prompt).environmentObject(model)
         }
+        .sheet(item: $model.deletePrompt) { prompt in
+            DeleteConfirmation(prompt: prompt).environmentObject(model)
+        }
         .sheet(isPresented: $showConnectionHelp) { ConnectionHelp().frame(width: 480).padding(32) }
         .toolbar {
             connectionToolbar
@@ -343,6 +346,15 @@ struct BrowserPane: View {
                         + (selection.wrappedValue.isEmpty
                             ? "" : " · \(selection.wrappedValue.count) selected"))
                 Spacer()
+                Button {
+                    model.requestDeleteSelection(side)
+                } label: {
+                    Image(systemName: "trash")
+                }.buttonStyle(.plain)
+                    .help(side == .mac ? "Move selection to Trash" : "Delete selection")
+                    .disabled(
+                        selection.wrappedValue.isEmpty || model.deleting
+                            || (side == .android && !model.connected))
                 Toggle(isOn: $model.showHidden) {
                     Image(systemName: model.showHidden ? "eye" : "eye.slash")
                 }.toggleStyle(.button).buttonStyle(.plain).help("Show hidden files")
@@ -626,6 +638,10 @@ struct ConflictSheet: View {
             Text(prompt.destination).font(.system(size: 10, design: .monospaced)).foregroundStyle(
                 .secondary
             ).textSelection(.enabled).lineLimit(2)
+            Text(
+                "Merge/Update checks SHA-256 hashes, copies missing or changed files, and keeps extra destination files."
+            )
+            .font(.system(size: 12)).foregroundStyle(.secondary)
             HStack {
                 Button("Cancel Transfer") { model.resolveConflict(.cancel) }.keyboardShortcut(
                     .cancelAction)
@@ -633,9 +649,10 @@ struct ConflictSheet: View {
                 Button("Skip") { model.resolveConflict(.skip) }
                 Button("Keep Both") { model.resolveConflict(.keepBoth) }.keyboardShortcut(
                     .defaultAction)
+                Button("Merge/Update") { model.resolveConflict(.merge) }
                 Button("Replace", role: .destructive) { model.resolveConflict(.replace) }
             }
-        }.padding(28).frame(width: 530)
+        }.padding(28).frame(width: 620)
     }
 }
 struct SettingsView: View {

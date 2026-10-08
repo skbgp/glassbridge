@@ -45,6 +45,7 @@ struct FileTable: NSViewRepresentable {
         table.setDraggingSourceOperationMask(.copy, forLocal: true)
         table.setDraggingSourceOperationMask(.copy, forLocal: false)
         table.exited = { context.coordinator.parent.targeted = false }
+        table.deleteSelection = { context.coordinator.parent.model.requestDeleteSelection(side) }
         let type = side == .mac ? UTType.androidBridgeItems : UTType.macBridgeItems
         table.registerForDraggedTypes(
             [NSPasteboard.PasteboardType(type.identifier)] + (side == .android ? [.fileURL] : []))
@@ -257,6 +258,15 @@ struct FileTable: NSViewRepresentable {
                 title: "Copy Path", action: #selector(copyClickedPath), keyEquivalent: "")
             copy.target = self
             menu.addItem(copy)
+            menu.addItem(.separator())
+            let delete = NSMenuItem(
+                title: parent.side == .mac ? "Move to Trash…" : "Delete…",
+                action: #selector(deleteSelected), keyEquivalent: "")
+            delete.target = self
+            delete.isEnabled =
+                !parent.model.deleting
+                && (parent.side == .mac || parent.model.connected)
+            menu.addItem(delete)
             if parent.side == .mac {
                 let reveal = NSMenuItem(
                     title: "Show in Finder", action: #selector(revealClicked), keyEquivalent: "")
@@ -265,6 +275,7 @@ struct FileTable: NSViewRepresentable {
             }
         }
         @objc private func transferSelected() { parent.model.enqueueSelection(parent.side) }
+        @objc private func deleteSelected() { parent.model.requestDeleteSelection(parent.side) }
         @objc private func openClicked() {
             if let table, entries.indices.contains(table.clickedRow) {
                 parent.open(entries[table.clickedRow])
@@ -286,6 +297,14 @@ struct FileTable: NSViewRepresentable {
     }
     private final class DropTable: NSTableView {
         var exited: (() -> Void)?
+        var deleteSelection: (() -> Void)?
+        override func keyDown(with event: NSEvent) {
+            if event.keyCode == 51 || event.keyCode == 117 {
+                deleteSelection?()
+            } else {
+                super.keyDown(with: event)
+            }
+        }
         override func draggingExited(_ sender: NSDraggingInfo?) {
             super.draggingExited(sender)
             exited?()

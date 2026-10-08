@@ -198,7 +198,9 @@ struct CopyBehaviorChecks {
             args=sys.argv[1:]
             if args[:1]==['-s']: args=args[2:]
             if args[0]=='exec-out':
-                if '; else printf 0; fi' in args[1]:
+                if 'rm -rf -- ' in args[1] and 'denied-delete.txt' in args[1]:
+                    print('Permission denied',file=sys.stderr); sys.exit(1)
+                if '; else printf 0; fi' in args[1] and 'stat -c %s' in args[1]:
                     counter=os.path.join(here,'.progress-samples')
                     try:
                         with open(counter) as inp: count=int(inp.read())+1
@@ -210,6 +212,7 @@ struct CopyBehaviorChecks {
                 sys.exit(subprocess.call(['/bin/sh','-c',args[1]],env=env))
             if args[0] in ('push','pull'):
                 args=[a for a in args[1:] if a!='-a']; source,target=args
+                with open(os.path.join(here,'copy-log'),'a') as log: log.write(os.path.basename(source)+'\n')
                 def copy_file(src,dst):
                     os.makedirs(os.path.dirname(dst),exist_ok=True)
                     with open(src,'rb') as inp, open(dst,'wb') as out:
@@ -217,6 +220,10 @@ struct CopyBehaviorChecks {
                             chunk=inp.read(65536)
                             if not chunk: break
                             out.write(chunk); out.flush(); time.sleep(0.025)
+                    if os.path.exists(os.path.join(here,'corrupt-copy')):
+                        with open(dst,'r+b') as out: out.write(b'!')
+                    if os.path.basename(src)=='z-fail.bin' and os.path.exists(os.path.join(here,'fail-copy')):
+                        print('Injected copy failure',file=sys.stderr); sys.exit(1)
                 if os.path.isdir(source):
                     for base, dirs, files in os.walk(source):
                         for name in files: copy_file(os.path.join(base,name),os.path.join(target,os.path.relpath(base,source),name))
@@ -224,7 +231,21 @@ struct CopyBehaviorChecks {
                 sys.exit(0)
             sys.exit(1)
             """#
-        for (name, script) in [("stat", statScript), ("adb-test", transportScript)] {
+        let hashScript = #"""
+            #!/usr/bin/python3
+            import hashlib, sys
+            for path in sys.argv[1:]:
+                hash=hashlib.sha256()
+                with open(path,'rb') as inp:
+                    while True:
+                        data=inp.read(1048576)
+                        if not data: break
+                        hash.update(data)
+                print(hash.hexdigest()+'  '+path)
+            """#
+        for (name, script) in [
+            ("stat", statScript), ("sha256sum", hashScript), ("adb-test", transportScript),
+        ] {
             let url = root.appendingPathComponent(name)
             try Data(script.utf8).write(to: url)
             try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
@@ -331,6 +352,8 @@ struct CopyBehaviorChecks {
         expectEqual(
             try Data(contentsOf: receive.appendingPathComponent("progress.bin")), replacement)
         // Verify replacement also handles complete folders and restores an original on failure.
+        try await checkMergesAndDeletion(
+            model, root: root, source: source, remote: remote, receive: receive)
         let oldFolder = root.appendingPathComponent("old-folder")
         let newFolder = root.appendingPathComponent("new-folder")
         try fm.createDirectory(at: oldFolder, withIntermediateDirectories: true)
@@ -345,6 +368,213 @@ struct CopyBehaviorChecks {
                 staging: root.appendingPathComponent("absent").path, destination: oldFolder.path,
                 replacing: true))
         expectTrue(fm.fileExists(atPath: oldFolder.appendingPathComponent("new").path))
+    }
+    @MainActor private func checkMergesAndDeletion(
+        _ model: AppModel, root: URL, source: URL, remote: URL, receive: URL
+    ) async throws {
+        let fm = FileManager.default
+        let folderName = "Merge ' 😀 folder"
+        let beforeFailures = failures
+        let input = source.appendingPathComponent(folderName)
+        let output = remote.appendingPathComponent(folderName)
+        for folder in [
+            input, output, input.appendingPathComponent("empty"),
+            input.appendingPathComponent("nested"),
+        ] {
+            try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        func put(_ folder: URL, _ name: String, _ data: Data) throws {
+            try data.write(to: folder.appendingPathComponent(name))
+        }
+        func entry(_ url: URL, directory: Bool = false) -> FileEntry {
+            FileEntry(
+                path: url.path, name: url.lastPathComponent, directory: directory,
+                symbolicLink: false, size: 0, modified: Date())
+        }
+        let unchanged = Data(repeating: 7, count: 2_000_000)
+        try put(input, "unchanged.bin", unchanged)
+        try put(output, "unchanged.bin", unchanged)
+        try put(input, "changed.bin", Data("NEW!".utf8))
+        try put(output, "changed.bin", Data("OLD!".utf8))
+        try put(input, "missing-empty.bin", Data())
+        try put(input, "nested/photo '\n😀.bin", Data([1, 2, 3]))
+        try put(output, "extra.bin", Data([9]))
+        model.androidPath = remote.path
+        model.macPath = receive.path
+        model.conflictResolver = { _ in .merge }
+        model.enqueue([entry(input, directory: true)], from: .mac)
+        _ = try await wait(model)
+        expectEqual(model.transfers.last?.state, .done, model.transfers.last?.detail ?? "")
+        expectTrue(model.transfers.last?.detail.contains("3 updated · 1 unchanged") == true)
+        expectEqual(
+            try Data(contentsOf: output.appendingPathComponent("changed.bin")), Data("NEW!".utf8))
+        expectEqual(try Data(contentsOf: output.appendingPathComponent("extra.bin")), Data([9]))
+        expectTrue(fm.fileExists(atPath: output.appendingPathComponent("empty").path))
+        let log = root.appendingPathComponent("copy-log")
+        expectFalse(try String(contentsOf: log, encoding: .utf8).contains("unchanged.bin"))
+        let before = try Data(contentsOf: log)
+        model.enqueue([entry(input, directory: true)], from: .mac)
+        _ = try await wait(model)
+        expectEqual(model.transfers.last?.totalBytes, 0)
+        expectEqual(model.transfers.last?.state, .done, model.transfers.last?.detail ?? "")
+        expectEqual(try Data(contentsOf: log), before)
+
+        let back = receive.appendingPathComponent(folderName)
+        try fm.createDirectory(at: back, withIntermediateDirectories: true)
+        try put(back, "unchanged.bin", unchanged)
+        try put(back, "changed.bin", Data("DIFF".utf8))
+        try put(back, "mac-extra.bin", Data([8]))
+        model.enqueue([entry(output, directory: true)], from: .android)
+        _ = try await wait(model)
+        expectEqual(model.transfers.last?.state, .done, model.transfers.last?.detail ?? "")
+        expectEqual(
+            try Data(contentsOf: back.appendingPathComponent("changed.bin")), Data("NEW!".utf8))
+        expectEqual(try Data(contentsOf: back.appendingPathComponent("mac-extra.bin")), Data([8]))
+        expectFalse(try String(contentsOf: log, encoding: .utf8).contains("unchanged.bin"))
+
+        // A nested file/folder collision fails before unrelated paths are modified.
+        try fm.removeItem(at: output.appendingPathComponent("nested"))
+        try put(output, "nested", Data([5]))
+        model.enqueue([entry(input, directory: true)], from: .mac)
+        _ = try await wait(model)
+        expectEqual(model.transfers.last?.state, .failed)
+        expectEqual(try Data(contentsOf: output.appendingPathComponent("nested")), Data([5]))
+        let clash = source.appendingPathComponent("root-clash")
+        try fm.createDirectory(at: clash, withIntermediateDirectories: true)
+        try put(remote, "root-clash", Data([4]))
+        model.enqueue([entry(clash, directory: true)], from: .mac)
+        _ = try await wait(model)
+        expectEqual(model.transfers.last?.state, .failed)
+        expectEqual(try Data(contentsOf: remote.appendingPathComponent("root-clash")), Data([4]))
+
+        // Corruption must not replace the old file. Retrying can finish the merge.
+        try put(source, "hash-fail.bin", Data("new".utf8))
+        try put(remote, "hash-fail.bin", Data("old".utf8))
+        try put(root, "corrupt-copy", Data())
+        model.enqueue([entry(source.appendingPathComponent("hash-fail.bin"))], from: .mac)
+        _ = try await wait(model)
+        expectEqual(model.transfers.last?.state, .failed)
+        expectEqual(
+            try Data(contentsOf: remote.appendingPathComponent("hash-fail.bin")), Data("old".utf8))
+        try fm.removeItem(at: root.appendingPathComponent("corrupt-copy"))
+        model.enqueue([entry(source.appendingPathComponent("hash-fail.bin"))], from: .mac)
+        _ = try await wait(model)
+        expectEqual(model.transfers.last?.state, .done)
+
+        let partial = source.appendingPathComponent("partial")
+        let partialTarget = remote.appendingPathComponent("partial")
+        for folder in [partial, partialTarget] {
+            try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        }
+        for name in ["a.bin", "z-fail.bin"] {
+            try put(partial, name, Data("new".utf8))
+            try put(partialTarget, name, Data("old".utf8))
+        }
+        try put(root, "fail-copy", Data())
+        model.enqueue([entry(partial, directory: true)], from: .mac)
+        _ = try await wait(model)
+        expectEqual(model.transfers.last?.state, .failed)
+        expectEqual(
+            try Data(contentsOf: partialTarget.appendingPathComponent("a.bin")), Data("new".utf8))
+        expectEqual(
+            try Data(contentsOf: partialTarget.appendingPathComponent("z-fail.bin")),
+            Data("old".utf8))
+        try fm.removeItem(at: root.appendingPathComponent("fail-copy"))
+        model.enqueue([entry(partial, directory: true)], from: .mac)
+        _ = try await wait(model)
+        expectEqual(model.transfers.last?.state, .done)
+        expectTrue(model.transfers.last?.detail.contains("1 updated · 1 unchanged") == true)
+
+        // Cancellation leaves the current file intact and removes temporary data.
+        try put(source, "cancel-merge.bin", Data(repeating: 1, count: 4_000_000))
+        try put(remote, "cancel-merge.bin", Data(repeating: 2, count: 4_000_000))
+        model.enqueue([entry(source.appendingPathComponent("cancel-merge.bin"))], from: .mac)
+        let deadline = Date().addingTimeInterval(10)
+        while model.transfers.last?.detail.hasPrefix("Updating") != true {
+            if Date() > deadline { throw BridgeError(message: "Merge did not start") }
+            try await Task.sleep(for: .milliseconds(20))
+        }
+        model.cancel(try require(model.transfers.last?.id))
+        _ = try await wait(model)
+        expectEqual(model.transfers.last?.state, .cancelled)
+        expectEqual(
+            try Data(contentsOf: remote.appendingPathComponent("cancel-merge.bin")),
+            Data(repeating: 2, count: 4_000_000))
+        expectFalse(
+            try fm.contentsOfDirectory(atPath: remote.path).contains {
+                $0.hasPrefix(".glassbridge-merge-")
+            })
+
+        let deleteFile = remote.appendingPathComponent("delete ' 😀; $(echo BAD).txt")
+        try Data([6]).write(to: deleteFile)
+        let selected = entry(deleteFile)
+        model.androidFiles = [selected]
+        model.androidSelection = [selected.id]
+        model.requestDeleteSelection(.android)
+        let cancelled = try require(model.deletePrompt)
+        model.deletePrompt = nil
+        model.confirmDeletion(cancelled)
+        expectTrue(fm.fileExists(atPath: deleteFile.path))
+        let active = Transfer(
+            id: UUID(), source: selected, from: .android, serial: "test",
+            destinationFolder: receive.path, deviceName: "Test phone")
+        model.transfers.append(active)
+        model.requestDeleteSelection(.android)
+        expectTrue(model.deletePrompt == nil)
+        model.transfers.removeAll { $0.id == active.id }
+        model.requestDeleteSelection(.android)
+        let approved = try require(model.deletePrompt)
+        model.confirmDeletion(approved)
+        model.confirmDeletion(approved)
+        while model.deleting { try await Task.sleep(for: .milliseconds(20)) }
+        expectFalse(fm.fileExists(atPath: deleteFile.path))
+        let deleteFolder = remote.appendingPathComponent("delete folder")
+        try fm.createDirectory(
+            at: deleteFolder.appendingPathComponent("child"), withIntermediateDirectories: true)
+        try put(deleteFolder, "child/file", Data([1]))
+        try await model.adb.delete(
+            entry(deleteFolder, directory: true), folder: remote.path, serial: "test")
+        expectFalse(fm.fileExists(atPath: deleteFolder.path))
+        let denied = remote.appendingPathComponent("denied-delete.txt")
+        try Data([8]).write(to: denied)
+        model.androidFiles = [entry(denied)]
+        model.androidSelection = [denied.path]
+        model.requestDeleteSelection(.android)
+        let deniedPrompt = try require(model.deletePrompt)
+        model.confirmDeletion(deniedPrompt)
+        while model.deleting { try await Task.sleep(for: .milliseconds(20)) }
+        expectTrue(fm.fileExists(atPath: denied.path))
+        expectTrue(model.alert?.contains("Permission denied") == true)
+        model.androidFiles = [entry(denied)]
+        model.androidSelection = [denied.path]
+        model.requestDeleteSelection(.android)
+        let disconnectedPrompt = try require(model.deletePrompt)
+        model.devices = []
+        model.confirmDeletion(disconnectedPrompt)
+        while model.deleting { try await Task.sleep(for: .milliseconds(20)) }
+        expectTrue(fm.fileExists(atPath: denied.path))
+        expectTrue(model.alert?.contains("disconnected") == true)
+        model.devices = [Device(id: "test", state: "device", name: "Test phone")]
+        model.androidSelection = []
+        model.requestDeleteSelection(.android)
+        expectTrue(model.deletePrompt == nil)
+        model.macPath = source.path
+        let macEntry = entry(source.appendingPathComponent("hash-fail.bin"))
+        model.macFiles = [macEntry]
+        model.macSelection = [macEntry.id]
+        model.requestDeleteSelection(.mac)
+        expectEqual(model.deletePrompt?.side, .mac)
+        model.deletePrompt = nil
+        expectTrue(fm.fileExists(atPath: macEntry.path))
+        expectThrows(
+            try validateDeletion(
+                entry(URL(fileURLWithPath: "/sdcard"), directory: true), folder: "/"))
+        expectThrows(try validateDeletion(entry(deleteFile), folder: source.path))
+        try validateDeletion(
+            entry(source.appendingPathComponent("hash-fail.bin")), folder: source.path)
+        print(
+            "\(failures == beforeFailures ? "PASS" : "FAIL"): Merge hashes, both directions, partial folders, failures, cancellation, and deletion safeguards"
+        )
     }
     @MainActor private func waitForConflict(_ model: AppModel) async throws {
         let deadline = Date().addingTimeInterval(10)
@@ -440,6 +670,9 @@ private func expectThrows<T>(_ value: @autoclosure () throws -> T) {
             let before = failures
             do {
                 try await DeviceIntegrationTests().testLiveFolderRoundTripAndDuplicateNames()
+                try await LiveMergeChecks().run(
+                    serial: ProcessInfo.processInfo.environment["GLASSBRIDGE_TEST_SERIAL"]!,
+                    adbPath: ProcessInfo.processInfo.environment["GLASSBRIDGE_TEST_ADB"]!)
             } catch {
                 fail(error.localizedDescription)
             }
@@ -448,6 +681,11 @@ private func expectThrows<T>(_ value: @autoclosure () throws -> T) {
             )
         } else {
             print("SKIP: Live Android checks (no test serial configured)")
+        }
+        if ProcessInfo.processInfo.environment["GLASSBRIDGE_TEST_TRASH"] == "1" {
+            let before = failures
+            do { try checkMacTrashRoundTrip() } catch { fail(error.localizedDescription) }
+            print("\(failures == before ? "PASS" : "FAIL"): Mac Trash and restoration")
         }
         print("\(failures) failures")
         exit(failures == 0 ? 0 : 1)

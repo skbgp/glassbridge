@@ -19,6 +19,8 @@ import UniformTypeIdentifiers
     @Published var alert: String?
     @Published var conflict: ConflictPrompt?
     @Published var copyPrompt: CopyPrompt?
+    @Published var deletePrompt: DeletePrompt?
+    @Published var deleting = false
     var conflictResolver: ((ConflictPrompt) async -> ConflictResolution)?
     private var conflictContinuation: CheckedContinuation<ConflictResolution, Never>?
     @Published var transfers: [Transfer] = []
@@ -177,6 +179,10 @@ import UniformTypeIdentifiers
         enqueue(files.filter { selection.contains($0.id) }, from: side)
     }
     func enqueue(_ entries: [FileEntry], from: Side, folder: String? = nil, serial: String? = nil) {
+        guard !deleting else {
+            alert = "Wait for deletion to finish before starting another transfer."
+            return
+        }
         guard let device = devices.first(where: { $0.id == (serial ?? selectedDevice) && $0.ready })
         else {
             alert = "Connect and authorize an Android device before transferring."
@@ -278,28 +284,33 @@ import UniformTypeIdentifiers
         try Task.checkCancellation()
         return resolution
     }
-    private func monitorTransfer(_ item: Transfer, staging: String, total: Int64) -> Task<
+    func monitorTransfer(
+        _ item: Transfer, staging: String, total: Int64,
+        directory: Bool? = nil, completedBytes: Int64 = 0
+    ) -> Task<
         Void, Never
     > {
         let service = adb
         return Task {
-            var samples: [(Date, Int64)] = [(Date(), 0)]
-            var highestCount: Int64 = 0
+            var samples: [(Date, Int64)] = [(Date(), completedBytes)]
+            var highestCount = completedBytes
             while !Task.isCancelled {
                 do {
                     let bytes: Int64
                     if item.from == .mac {
                         bytes = try await service.transferredBytes(
-                            staging, directory: item.source.directory, serial: item.serial)
+                            staging, directory: directory ?? item.source.directory,
+                            serial: item.serial)
                     } else {
                         bytes = await Task.detached(priority: .utility) {
-                            localTransferBytes(staging, directory: item.source.directory)
+                            localTransferBytes(
+                                staging, directory: directory ?? item.source.directory)
                         }.value
                     }
                     guard !Task.isCancelled else { break }
                     let now = Date()
                     // A size scan can be incomplete while the destination is changing.
-                    let count = max(highestCount, min(total, max(0, bytes)))
+                    let count = max(highestCount, min(total, completedBytes + max(0, bytes)))
                     highestCount = count
                     samples.append((now, count))
                     samples.removeAll { now.timeIntervalSince($0.0) > 5 }
@@ -374,6 +385,7 @@ import UniformTypeIdentifiers
         }
         var staging: String?
         var published = false
+        var merging = false
         var monitor: Task<Void, Never>?
         do {
             guard devices.contains(where: { $0.id == item.serial && $0.ready }) else {
@@ -414,6 +426,11 @@ import UniformTypeIdentifiers
                         destinationName: item.from == .mac ? item.deviceName : "your Mac"))
                 switch choice {
                 case .replace: replacing = true
+                case .merge:
+                    merging = true
+                    try await mergeTransfer(
+                        item, destination: destination, sourceManifest: sourceManifest)
+                    return
                 case .skip:
                     update(item.id) {
                         $0.state = .skipped
@@ -558,13 +575,19 @@ import UniformTypeIdentifiers
         } catch is CancellationError {
             update(item.id) {
                 $0.state = .cancelled
-                $0.detail = "Transfer cancelled"
+                $0.detail =
+                    merging
+                    ? "Merge cancelled. Completed updates are kept; Merge/Update can continue later."
+                    : "Transfer cancelled"
                 $0.progress = nil
             }
         } catch {
             update(item.id) {
                 $0.state = .failed
-                $0.detail = error.localizedDescription
+                $0.detail =
+                    error.localizedDescription
+                    + (merging
+                        ? " Completed merge updates are kept; retry Merge/Update to continue." : "")
                 $0.progress = nil
             }
         }

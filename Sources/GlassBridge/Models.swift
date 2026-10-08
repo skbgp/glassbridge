@@ -41,6 +41,14 @@ struct CopyPrompt: Identifiable {
     let serial: String
     let destinationName: String
 }
+struct DeletePrompt: Identifiable {
+    let id = UUID()
+    let entries: [FileEntry]
+    let side: Side
+    let folder: String
+    let serial: String
+    let deviceName: String
+}
 extension UTType {
     static let macBridgeItems = UTType(exportedAs: "com.glassbridge.mac-items")
     static let androidBridgeItems = UTType(exportedAs: "com.glassbridge.android-items")
@@ -72,7 +80,7 @@ struct Transfer: Identifiable, Sendable {
     var destination: String?
     var started: Date?
 }
-enum ConflictResolution: Sendable { case replace, keepBoth, skip, cancel }
+enum ConflictResolution: Sendable { case replace, keepBoth, merge, skip, cancel }
 struct ConflictPrompt: Identifiable, Sendable {
     let id: UUID
     let name: String

@@ -50,6 +50,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     weak var model: AppModel?
     private var quitting = false
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if model?.deleting == true {
+            let alert = NSAlert()
+            alert.messageText = "Files are still being removed"
+            alert.informativeText = "Keep GlassBridge open until this finishes."
+            alert.addButton(withTitle: "Keep Open")
+            alert.runModal()
+            return .terminateCancel
+        }
         guard !quitting, let model, model.activeCount > 0 else { return .terminateNow }
         let alert = NSAlert()
         alert.messageText = "Transfers are still running"
