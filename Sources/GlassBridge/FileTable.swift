@@ -25,6 +25,8 @@ struct FileTable: NSViewRepresentable {
         table.intercellSpacing = NSSize(width: 10, height: 1)
         table.allowsMultipleSelection = true
         table.allowsEmptySelection = true
+        // Drag vertically to select rows; drag horizontally to copy between panes.
+        table.verticalMotionCanBeginDrag = false
         table.columnAutoresizingStyle = .firstColumnOnlyAutoresizingStyle
         let name = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("name"))
         name.minWidth = 140
