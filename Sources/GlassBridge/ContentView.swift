@@ -39,6 +39,9 @@ struct ContentView: View {
         .sheet(item: $model.conflict) { prompt in
             ConflictSheet(prompt: prompt).environmentObject(model)
         }
+        .sheet(item: $model.copyPrompt) { prompt in
+            CopyConfirmation(prompt: prompt).environmentObject(model)
+        }
         .sheet(isPresented: $showConnectionHelp) { ConnectionHelp().frame(width: 480).padding(32) }
         .toolbar {
             connectionToolbar
