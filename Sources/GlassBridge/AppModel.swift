@@ -182,6 +182,8 @@ import UniformTypeIdentifiers
             alert = "Connect and authorize an Android device before transferring."
             return
         }
+        let targetFolder = folder ?? (from == .mac ? androidPath : macPath)
+        let entries = unqueuedEntries(entries, from: from, folder: targetFolder, serial: device.id)
         guard !entries.isEmpty else { return }
         if entries.contains(where: \.symbolicLink) {
             alert = "Select original files and folders. Symbolic links are not supported."
@@ -191,7 +193,7 @@ import UniformTypeIdentifiers
             transfers.append(
                 Transfer(
                     id: UUID(), source: entry, from: from, serial: device.id,
-                    destinationFolder: folder ?? (from == .mac ? androidPath : macPath),
+                    destinationFolder: targetFolder,
                     deviceName: device.name))
         }
         showTransfers = true
@@ -229,6 +231,7 @@ import UniformTypeIdentifiers
         }
     }
     private func requestCopy(_ entries: [FileEntry], from: Side, folder: String, serial: String) {
+        let entries = unqueuedEntries(entries, from: from, folder: folder, serial: serial)
         guard !entries.isEmpty, copyPrompt == nil else { return }
         guard let device = devices.first(where: { $0.id == serial && $0.ready }) else {
             alert = "Connect and authorize an Android device before transferring."
@@ -242,6 +245,19 @@ import UniformTypeIdentifiers
         guard copyPrompt?.id == prompt.id else { return }
         copyPrompt = nil
         enqueue(prompt.entries, from: prompt.from, folder: prompt.folder, serial: prompt.serial)
+    }
+    private func unqueuedEntries(
+        _ entries: [FileEntry], from: Side, folder: String, serial: String
+    ) -> [FileEntry] {
+        var seen = Set<String>()
+        return entries.filter { entry in
+            seen.insert(entry.path).inserted
+                && !transfers.contains { transfer in
+                    transfer.source.path == entry.path && transfer.from == from
+                        && transfer.serial == serial && transfer.destinationFolder == folder
+                        && [.waiting, .running, .verifying, .deciding].contains(transfer.state)
+                }
+        }
     }
     func resolveConflict(_ resolution: ConflictResolution) {
         let continuation = conflictContinuation
@@ -323,12 +339,10 @@ import UniformTypeIdentifiers
         }
     }
     func retry(_ id: UUID) {
-        guard let old = transfers.first(where: { $0.id == id }) else { return }
-        transfers.append(
-            Transfer(
-                id: UUID(), source: old.source, from: old.from, serial: old.serial,
-                destinationFolder: old.destinationFolder, deviceName: old.deviceName))
-        startQueue()
+        guard let old = transfers.first(where: { $0.id == id }),
+            [.failed, .cancelled].contains(old.state)
+        else { return }
+        enqueue([old.source], from: old.from, folder: old.destinationFolder, serial: old.serial)
     }
     func update(_ id: UUID, _ action: (inout Transfer) -> Void) {
         guard let i = transfers.firstIndex(where: { $0.id == id }) else { return }

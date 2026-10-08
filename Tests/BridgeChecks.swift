@@ -123,6 +123,9 @@ struct DeviceIntegrationTests {
                 size: 0, modified: Date())
             model.enqueue([entry, entry], from: .mac)
             try await waitUntilIdle(model)
+            expectEqual(model.transfers.count, 1)
+            model.enqueue([entry], from: .mac)
+            try await waitUntilIdle(model)
             expectEqual(
                 model.transfers.map(\.state), [.done, .done],
                 model.transfers.map(\.detail).joined(separator: "\n"))
@@ -248,6 +251,9 @@ struct CopyBehaviorChecks {
         model.androidPath = receive.path
         model.confirmCopy(prompt)
         model.confirmCopy(prompt)
+        model.enqueue([entry(), entry()], from: .mac, folder: nested.path, serial: "test")
+        model.receive(payload, on: .android, folder: nested.path, serial: "test")
+        expectTrue(model.copyPrompt == nil)
         expectEqual(model.transfers.count, 1)
         _ = try await wait(model)
         expectEqual(model.transfers.last?.state, .done)
