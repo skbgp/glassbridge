@@ -1,14 +1,36 @@
 # GlassBridge
 
-A macOS app for copying files and folders between a Mac and an Android phone using ADB.
+Copy files and folders between your Mac and Android phone over ADB. There’s a file list on each side, with drag and drop and a transfer queue underneath.
 
-The window has two file browsers: Mac on the left, Android on the right. Open the folders you want, select files, and drag them across. You can also use the transfer buttons or drop files from Finder into the Android pane.
+## Install
 
-Drop onto a folder to copy into it, or onto empty space to use the open folder. A confirmation shows the destination before copying starts. Drag up or down to select multiple rows; drag sideways to transfer them.
+Download the app from [Releases](https://github.com/skbgp/glassbridge/releases/tag/v0.1.0), unzip it, and move it to Applications. The download includes ADB and runs on Apple Silicon Macs with macOS 14 or later.
 
-## Build and run
+The app isn’t notarized yet. If macOS blocks it, try opening it, then look for **Open Anyway** in System Settings → Privacy & Security.
 
-You need macOS 14 or later, Swift 6.2, and the macOS 26 SDK. Apple's Command Line Tools are enough. There are no third-party Swift dependencies.
+On your phone, enable USB debugging, plug in a USB data cable, and accept the prompt to allow your Mac. Choose the phone in the toolbar if you have more than one connected.
+
+## Copying files
+
+Double-click folders to open them. Drag up or down to select a range of rows, or use Command-click and Shift-click. Drag sideways to copy to the other device.
+
+Drop onto a folder to copy inside it. Drop onto empty space to use the open folder. Before a drop starts copying, you get a confirmation showing the destination.
+
+If an item already exists, choose Replace, Keep Both, or Skip. Replacing a folder replaces the whole folder; it doesn’t merge the contents. Originals on the source device stay where they are.
+
+You can also use the arrow buttons, or drag files from Finder into the Android pane. The queue shows bytes copied, speed, and estimated time left. Copies run one at a time.
+
+| Shortcut | Action |
+| --- | --- |
+| ⌘⇧R | Send selected files to Android |
+| ⌘⇧L | Save selected files to the Mac |
+| ⌘R | Refresh |
+| ⌘J | Show or hide transfers |
+| ⌘⇧. | Show or hide hidden files |
+
+## Build
+
+You’ll need Swift 6.2 and the macOS 26 SDK. Apple’s Command Line Tools are enough.
 
 ```sh
 git clone https://github.com/skbgp/glassbridge.git
@@ -17,49 +39,15 @@ cd glassbridge
 open dist/GlassBridge.app
 ```
 
-The build script looks for ADB at `~/Library/Android/sdk/platform-tools/adb`. If it finds it, it copies ADB and its notices into the app. Otherwise, choose your ADB executable in the app's Settings. You can also supply its path when building:
+The script bundles ADB from `~/Library/Android/sdk/platform-tools/adb` when available. To use another copy:
 
 ```sh
 GLASSBRIDGE_ADB_PATH=/path/to/platform-tools/adb ./scripts/build.sh
 ```
 
-Get ADB from Google's [Platform Tools](https://developer.android.com/tools/releases/platform-tools). On the phone, enable USB debugging, connect a USB data cable, and accept the authorization prompt. If more than one phone is connected, choose one in the toolbar.
+You can also choose ADB in the app’s Settings. Google provides it in [Platform Tools](https://developer.android.com/tools/releases/platform-tools). Builds use the architecture of the Mac running the script and are locally signed.
 
-The script builds for the Mac running it. The app is locally signed; it is not notarized.
-
-## Using it
-
-Double-click a folder to open it. Click the path above either pane to enter a folder path. Search filters the current folder. Command-click selects several items, and Shift-click selects a range.
-
-| Shortcut | Action |
-| --- | --- |
-| Command-Shift-R | Send the Mac selection to Android |
-| Command-Shift-L | Save the Android selection to the Mac |
-| Command-R | Refresh both folders |
-| Command-J | Show or hide transfers |
-| Command-Shift-period | Show or hide hidden files |
-
-Copies go into the folder open in the destination pane. Originals stay where they are. If the name is already used, the app asks whether to replace it, keep both copies, or skip it. Replacing a folder replaces its contents rather than merging folders.
-
-The transfer queue shows bytes copied, total size, percentage, speed, and an estimate of the remaining time. Jobs run one at a time. You can cancel or retry a job while continuing to browse.
-
-## How copies are checked
-
-Each transfer writes to a temporary destination first. The app checks file names, sizes, and folder structure before giving the copy its final name. Empty folders are created explicitly because ADB can skip them.
-
-When replacing an item, the original stays in place until the new copy passes these checks. If the final move fails, the app attempts to restore the original. If a disconnection prevents cleanup, the transfer message identifies the temporary copy or backup that may remain.
-
-These checks compare sizes and structure, not file checksums. Live progress samples the destination about every 650 ms on Android and 350 ms on the Mac. Speed and remaining time are estimates.
-
-## Tests
-
-```sh
-./scripts/test.sh
-```
-
-The checks run without a phone or a full Xcode installation. They cover filename handling, shell quoting, cancellation, timeouts, empty folders, conflict choices, replacement rollback, and progress in both directions using a slow test transport.
-
-To test with an authorized phone:
+Run the local checks with `./scripts/test.sh`. For a phone test:
 
 ```sh
 GLASSBRIDGE_TEST_SERIAL='your-device-serial' \
@@ -67,25 +55,14 @@ GLASSBRIDGE_TEST_ADB=/path/to/platform-tools/adb \
 ./scripts/test.sh
 ```
 
-The phone test creates its own temporary folder under Download, copies a folder both ways, checks the test file's contents, and removes its test data.
+The phone test uses a temporary folder under Download and cleans up its own files.
 
-## Current limits
+## A few things to know
 
-- Android only exposes storage that ADB has permission to access. Protected app data may be unavailable.
-- Symbolic links and special files are not supported.
-- Dragging Android files directly into Finder is not supported. Use the Mac pane instead.
-- The queue lasts for the current app session; transfers do not resume after restarting.
-- Folder listings and verification output are limited to 16 MB.
-- Transfer speed has not been benchmarked against MTP.
+Copies go to a temporary destination first. File names, sizes, and folder structure are checked before the copy gets its final name. These are size checks, not checksum verification. Progress comes from sampling the destination, so speed and time left are estimates.
 
-Folder transfers have been tested on an A015 phone. The conflict handling and live progress changes also pass the local transport tests. Other phones and long-running transfers need more testing.
+Symbolic links aren’t supported. Android files can’t be dragged straight into Finder; use the Mac pane. Transfers don’t resume after the app closes. Android storage access depends on the phone’s ADB permissions.
 
-## Source
+It’s been tested with an A015 phone and local transfer checks. There isn’t an MTP speed comparison yet.
 
-The app lives in `Sources/GlassBridge`. `AppModel.swift` manages browsing and the transfer queue. `FileTable.swift` uses AppKit for file selection and drag and drop. `ProcessRunner.swift` runs ADB without blocking the interface. `TransferPublishing.swift` handles progress sampling and final replacement. The remaining files define the window, views, and data types.
-
-The icon is generated by `scripts/make-icon.swift`. `Tests/BridgeChecks.swift` contains the test harness.
-
-## ADB notices
-
-ADB is a separate Google tool and retains its own licenses and notices. The build script copies its notices when available.
+The Swift source is in `Sources/GlassBridge`, with checks in `Tests/BridgeChecks.swift`. Bundled ADB keeps its own licenses; its notices are included in the app.
