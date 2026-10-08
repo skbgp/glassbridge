@@ -284,6 +284,7 @@ import UniformTypeIdentifiers
         let service = adb
         return Task {
             var samples: [(Date, Int64)] = [(Date(), 0)]
+            var highestCount: Int64 = 0
             while !Task.isCancelled {
                 do {
                     let bytes: Int64
@@ -297,7 +298,9 @@ import UniformTypeIdentifiers
                     }
                     guard !Task.isCancelled else { break }
                     let now = Date()
-                    let count = min(total, max(0, bytes))
+                    // A size scan can be incomplete while the destination is changing.
+                    let count = max(highestCount, min(total, max(0, bytes)))
+                    highestCount = count
                     samples.append((now, count))
                     samples.removeAll { now.timeIntervalSince($0.0) > 5 }
                     let first = samples.first ?? (now, count)
@@ -500,7 +503,7 @@ import UniformTypeIdentifiers
             try Task.checkCancellation()
             update(item.id) {
                 $0.state = .verifying
-                $0.progress = nil
+                $0.progress = 1
                 $0.detail = "Checking file names and sizes…"
             }
             let targetManifest: [String: Int64]

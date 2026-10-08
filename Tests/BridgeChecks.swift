@@ -198,6 +198,14 @@ struct CopyBehaviorChecks {
             args=sys.argv[1:]
             if args[:1]==['-s']: args=args[2:]
             if args[0]=='exec-out':
+                if '; else printf 0; fi' in args[1]:
+                    counter=os.path.join(here,'.progress-samples')
+                    try:
+                        with open(counter) as inp: count=int(inp.read())+1
+                    except FileNotFoundError: count=1
+                    with open(counter,'w') as out: out.write(str(count))
+                    if count % 3 == 0:
+                        print(0); sys.exit(0)
                 env=os.environ.copy(); env['PATH']=here+':'+env.get('PATH','/usr/bin:/bin')
                 sys.exit(subprocess.call(['/bin/sh','-c',args[1]],env=env))
             if args[0] in ('push','pull'):
@@ -337,7 +345,12 @@ struct CopyBehaviorChecks {
     @MainActor private func wait(_ model: AppModel) async throws -> Bool {
         let deadline = Date().addingTimeInterval(30)
         var partial = false
+        var highest: Int64 = 0
         while model.activeCount > 0 {
+            if let item = model.transfers.last, item.state == .running {
+                expectTrue(item.transferredBytes >= highest)
+                highest = max(highest, item.transferredBytes)
+            }
             if let item = model.transfers.last, item.state == .running, item.transferredBytes > 0,
                 item.transferredBytes < item.totalBytes, item.bytesPerSecond > 0,
                 item.secondsRemaining != nil
