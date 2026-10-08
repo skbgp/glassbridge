@@ -71,7 +71,7 @@ struct ContentView: View {
     }
     @ToolbarContentBuilder private var connectionToolbar: some ToolbarContent {
         if #available(macOS 26.0, *) {
-            connectionItem.sharedBackgroundVisibility(model.devices.isEmpty ? .hidden : .automatic)
+            connectionItem.sharedBackgroundVisibility(.hidden)
         } else {
             connectionItem
         }
