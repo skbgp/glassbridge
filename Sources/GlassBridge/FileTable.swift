@@ -193,7 +193,13 @@ struct FileTable: NSViewRepresentable {
                 parent.side == .android
                 && info.draggingPasteboard.availableType(from: [.fileURL]) != nil
             guard hasInternal || hasFinder else { return [] }
-            tableView.setDropRow(-1, dropOperation: .above)
+            let hoveredRow = tableView.row(
+                at: tableView.convert(info.draggingLocation, from: nil))
+            if entries.indices.contains(hoveredRow), entries[hoveredRow].directory {
+                tableView.setDropRow(hoveredRow, dropOperation: .on)
+            } else {
+                tableView.setDropRow(-1, dropOperation: .above)
+            }
             parent.targeted = true
             return .copy
         }
@@ -202,6 +208,9 @@ struct FileTable: NSViewRepresentable {
             dropOperation operation: NSTableView.DropOperation
         ) -> Bool {
             parent.targeted = false
+            let folder =
+                operation == .on && entries.indices.contains(row) && entries[row].directory
+                ? entries[row].path : parent.path
             let type = NSPasteboard.PasteboardType(
                 (parent.side == .mac ? UTType.androidBridgeItems : UTType.macBridgeItems).identifier
             )
@@ -209,7 +218,7 @@ struct FileTable: NSViewRepresentable {
                 let payload = try? JSONDecoder().decode(DragPayload.self, from: data)
             {
                 parent.model.receive(
-                    payload, on: parent.side, folder: parent.path,
+                    payload, on: parent.side, folder: folder,
                     serial: parent.model.selectedDevice)
                 return true
             }
@@ -219,7 +228,7 @@ struct FileTable: NSViewRepresentable {
                 !urls.isEmpty
             {
                 parent.model.receiveLocalURLs(
-                    urls, folder: parent.path, serial: parent.model.selectedDevice)
+                    urls, folder: folder, serial: parent.model.selectedDevice)
                 return true
             }
             return false

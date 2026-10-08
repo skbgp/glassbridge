@@ -4,6 +4,8 @@ A macOS app for copying files and folders between a Mac and an Android phone usi
 
 The window has two file browsers: Mac on the left, Android on the right. Open the folders you want, select files, and drag them across. You can also use the transfer buttons or drop files from Finder into the Android pane.
 
+Drop onto a folder to copy into it, or onto empty space to use the open folder. A confirmation shows the destination before copying starts. Drag up or down to select multiple rows; drag sideways to transfer them.
+
 ## Build and run
 
 You need macOS 14 or later, Swift 6.2, and the macOS 26 SDK. Apple's Command Line Tools are enough. There are no third-party Swift dependencies.

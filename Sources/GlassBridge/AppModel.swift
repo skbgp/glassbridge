@@ -18,6 +18,7 @@ import UniformTypeIdentifiers
     @Published var connectionError: String?
     @Published var alert: String?
     @Published var conflict: ConflictPrompt?
+    @Published var copyPrompt: CopyPrompt?
     var conflictResolver: ((ConflictPrompt) async -> ConflictResolution)?
     private var conflictContinuation: CheckedContinuation<ConflictResolution, Never>?
     @Published var transfers: [Transfer] = []
@@ -202,7 +203,7 @@ import UniformTypeIdentifiers
             alert = "This selection belongs to a different Android device."
             return
         }
-        enqueue(payload.entries, from: payload.side, folder: folder, serial: serial)
+        requestCopy(payload.entries, from: payload.side, folder: folder, serial: serial)
     }
     func receiveLocalURLs(_ urls: [URL], folder: String? = nil, serial: String? = nil) {
         let targetFolder = folder ?? androidPath
@@ -223,9 +224,24 @@ import UniformTypeIdentifiers
                             modified: value.contentModificationDate ?? .distantPast)
                     }
                 }.value
-                enqueue(entries, from: .mac, folder: targetFolder, serial: targetSerial)
+                requestCopy(entries, from: .mac, folder: targetFolder, serial: targetSerial)
             } catch { alert = error.localizedDescription }
         }
+    }
+    private func requestCopy(_ entries: [FileEntry], from: Side, folder: String, serial: String) {
+        guard !entries.isEmpty, copyPrompt == nil else { return }
+        guard let device = devices.first(where: { $0.id == serial && $0.ready }) else {
+            alert = "Connect and authorize an Android device before transferring."
+            return
+        }
+        copyPrompt = CopyPrompt(
+            entries: entries, from: from, folder: folder, serial: serial,
+            destinationName: from == .mac ? device.name : "Your Mac")
+    }
+    func confirmCopy(_ prompt: CopyPrompt) {
+        guard copyPrompt?.id == prompt.id else { return }
+        copyPrompt = nil
+        enqueue(prompt.entries, from: prompt.from, folder: prompt.folder, serial: prompt.serial)
     }
     func resolveConflict(_ resolution: ConflictResolution) {
         let continuation = conflictContinuation

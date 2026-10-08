@@ -233,6 +233,27 @@ struct CopyBehaviorChecks {
                 symbolicLink: false,
                 size: Int64(original.count), modified: Date())
         }
+        let nested = remote.appendingPathComponent("Dropped folder")
+        try fm.createDirectory(at: nested, withIntermediateDirectories: true)
+        let payload = DragPayload(side: .mac, entries: [entry()], serial: nil)
+        model.receive(payload, on: .android, folder: nested.path, serial: "test")
+        let cancelledPrompt = try require(model.copyPrompt)
+        expectEqual(model.transfers.count, 0)
+        model.copyPrompt = nil
+        model.confirmCopy(cancelledPrompt)
+        expectEqual(model.transfers.count, 0)
+        model.receive(payload, on: .android, folder: nested.path, serial: "test")
+        let prompt = try require(model.copyPrompt)
+        expectEqual(prompt.folder, nested.path)
+        model.androidPath = receive.path
+        model.confirmCopy(prompt)
+        model.confirmCopy(prompt)
+        expectEqual(model.transfers.count, 1)
+        _ = try await wait(model)
+        expectEqual(model.transfers.last?.state, .done)
+        expectEqual(try Data(contentsOf: nested.appendingPathComponent("progress.bin")), original)
+        expectFalse(fm.fileExists(atPath: receive.appendingPathComponent("progress.bin").path))
+        model.androidPath = remote.path
         model.enqueue([entry()], from: .mac)
         let progress = try await wait(model)
         expectTrue(progress)

@@ -33,6 +33,14 @@ struct DragPayload: Codable, Sendable {
     let entries: [FileEntry]
     let serial: String?
 }
+struct CopyPrompt: Identifiable {
+    let id = UUID()
+    let entries: [FileEntry]
+    let from: Side
+    let folder: String
+    let serial: String
+    let destinationName: String
+}
 extension UTType {
     static let macBridgeItems = UTType(exportedAs: "com.glassbridge.mac-items")
     static let androidBridgeItems = UTType(exportedAs: "com.glassbridge.android-items")
