@@ -230,6 +230,20 @@ struct CopyBehaviorChecks {
             try fm.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
         }
         let path = source.appendingPathComponent("progress.bin")
+        let largeFolder = root.appendingPathComponent("large-progress")
+        try fm.createDirectory(at: largeFolder, withIntermediateDirectories: true)
+        for (name, size) in [("first", UInt64(3_000_000_000)), ("second", UInt64(4_000_000_000))] {
+            let file = largeFolder.appendingPathComponent(name)
+            fm.createFile(atPath: file.path, contents: nil)
+            let handle = try FileHandle(forWritingTo: file)
+            try handle.truncate(atOffset: size)
+            try handle.close()
+        }
+        let sizeService = ADB(executable: root.appendingPathComponent("adb-test").path)
+        expectEqual(
+            try await sizeService.transferredBytes(
+                largeFolder.path, directory: true, serial: "test"),
+            7_000_000_000)
         let original = Data(repeating: 7, count: 4 * 1024 * 1024)
         try original.write(to: path)
         let model = AppModel()

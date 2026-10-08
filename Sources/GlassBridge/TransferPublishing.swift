@@ -53,16 +53,21 @@ extension ADB {
         let quoted = shellQuote(path)
         let script =
             directory
-            ? "if [ -d \(quoted) ]; then total=0; for size in $(find \(quoted) -type f -exec stat -c %s {} + 2>/dev/null); do total=$((total+size)); done; printf '%s' \"$total\"; else printf 0; fi"
+            ? "if [ -d \(quoted) ]; then find \(quoted) -type f -exec stat -c %s {} +; else printf 0; fi"
             : "if [ -f \(quoted) ]; then stat -c %s \(quoted); else printf 0; fi"
         let data = try await shell(script, serial: serial, timeout: 4)
-        guard
-            let bytes = Int64(
-                String(decoding: data, as: UTF8.self).trimmingCharacters(
-                    in: .whitespacesAndNewlines)),
-            bytes >= 0
-        else { throw BridgeError(message: "Could not read transfer progress.") }
-        return bytes
+        // Android shell arithmetic can overflow at 2 GiB; add sizes on the Mac.
+        var total: Int64 = 0
+        for field in String(decoding: data, as: UTF8.self).split(whereSeparator: { $0.isWhitespace }
+        ) {
+            guard let size = Int64(field), size >= 0 else {
+                throw BridgeError(message: "Could not read transfer progress.")
+            }
+            let sum = total.addingReportingOverflow(size)
+            guard !sum.overflow else { throw BridgeError(message: "Transfer size is too large.") }
+            total = sum.partialValue
+        }
+        return total
     }
     func publish(staging: String, destination: String, replacing: Bool, serial: String) async throws
         -> String?
